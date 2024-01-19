@@ -1,0 +1,350 @@
+---
+title: "NHTS_ELDER_WALKER"
+editor_options: 
+  chunk_output_type: console
+---
+
+## Author : Atena Haydari Farsanki 400442015
+
+## Modeling the walking duration of American elderly people according to their health: their analysis using NHTS2017 data
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(tictoc)
+library(caret)
+library(parallelPlot)
+library(earth)
+library(vip)
+library(purrr)
+library(dplyr)
+library(broom)
+library(esquisse)
+library(stargazer)
+library(randomForest) 
+library(ggplot2)
+library(pROC)
+library(mlr3)
+library(paradox)
+library(mlr3learners)
+library(mlr3extralearners)
+library(mlr3pipelines)
+library(mlr3viz)
+library(mlr3tuning)
+library(mlr3data)
+library(mlr3filters)
+library(mlr3tuning)
+library(patchwork)
+library(parallel)
+library(psych)
+library(ggplot2)
+
+```
+
+## Data
+
+```{r}
+load("D:/New folder/nhts/NHTS_ELDER_WALKER/RawData.RData")
+t <-trip
+per <- per
+v <- veh 
+hh <- hh
+Data <- t %>% 
+  filter( TRPTRANS %in% 01) 
+Data <- Data %>%
+  filter(WHYTRP1S %in% c(01, 40, 80))
+Data <- Data|>
+    group_by(HOUSEID, PERSONID) |> 
+    summarise(dis = sum(TRPMILES),
+              time = sum(TRVLCMIN),
+               n = n(),
+               age = first(R_AGE_IMP)) |> 
+        ungroup()
+  
+Data <- Data %>% 
+
+  filter(age>65)
+
+merged1 <- merge(Data, t[, c("HOUSEID", "WTTRDFIN", "VMT_MILE","STRTTIME","TRPMILES","WHYTRP1S")], by = "HOUSEID", all.x = TRUE)
+merged1 <- merge(merged1, per[, c("HOUSEID","HEALTH","R_SEX_IMP","HHSTATE","TIMETOWK","MEDCOND", "EDUC", "HHFAMINC","ALT_23","HHSIZE","PHYACT","VPACT","WALK4EX","WALK_DEF","WALK_GKQ")], by = "HOUSEID", all.x = TRUE)
+merged1 <- merge(merged1, hh[, c("HOUSEID","CNTTDHH","PLACE","TRAVDAY","WALK","WALK2SAVE","PLACE")], by = "HOUSEID", all.x = TRUE)
+
+
+
+
+
+merged1 <- merged1 %>%
+  distinct(PERSONID, HOUSEID, .keep_all = TRUE)
+merged1 <- merged1[ , -which(names(merged1) == "PLACE.1")]
+save(merged1,file = "merged1.RData")
+
+
+
+
+view(merged1)
+
+
+data_good_health <- merged1 %>%
+  filter(HEALTH %in% c("1", "2", "3"))
+
+save(data_good_health,file="data_good_health.RData")
+view(data_good_health)
+data_poor_health <- merged1 %>%
+  filter(HEALTH %in% c("4", "5"))
+save(data_poor_health,file="data_poor_health.RData")
+View(merged1)
+          
+```
+
+## modeling
+
+```{r}
+
+library(randomForest) 
+library(ggplot2)
+set.seed(123) 
+selected_columns  <-  c(
+  "time","HOUSEID", "VMT_MILE","TRPMILES"
+,"HEALTH","ALT_23","HHSIZE","PLACE","VPACT","WALK","WALK2SAVE","WALK_DEF","WALK_GKQ","dis")
+selected_data <- merged1 %>% 
+  select(all_of(selected_columns))
+# Check for missing values in the selected data
+missing_values <- sum(is.na(selected_data))
+cat("Missing values in the selected data:", missing_values, "\n")
+
+# Drop rows with missing values
+selected_data <- na.omit(selected_data)
+
+# Split the data into training and testing sets
+set.seed(123)  # Set seed for reproducibility
+train_index <- createDataPartition(selected_data$time, p = 0.8, list = FALSE)
+train_data <- selected_data[train_index, ]
+test_data <- selected_data[-train_index, ]
+
+# Train a simple model (random forest for demonstration)
+model <- randomForest(time ~ ., data = train_data)
+
+# Make predictions on the test set
+predictions <- predict(model, newdata = test_data)
+
+rsquared <- 1 - (sum((test_data$time - predictions)^2) / sum((test_data$time - mean(test_data$time))^2))
+cat("R-squared:", rsquared, "\n")
+            
+
+
+#Descriptive Statistics
+
+library(psych)
+library(ggplot2)
+
+# Calculate descriptive statistics for each feature
+descriptive_stats <- lapply(selected_columns, function(col) {
+  stats <- suppressWarnings(describe(selected_data[[col]]))
+  data.frame(Statistic = c("Mean", "SD", "Min", "Max"), Value = c(stats$mean, stats$sd, stats$min, stats$max), Feature = col)
+})
+
+# Combine the statistics for all features into a single data frame
+descriptive_stats <- do.call(rbind, descriptive_stats)
+
+# Create the table plot
+table_plot <- ggplot(descriptive_stats, aes(x = Feature, y = Statistic, fill = Value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Value, 2)), color = "black", size = 3) +
+  scale_fill_gradient(low = "#E8F0FE", high = "#1F4E79") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA)
+  ) +
+  labs(title = "Descriptive Statistics") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Display the table plot
+print(table_plot)
+
+
+
+
+
+
+
+data_merged <- load("D:/New folder/nhts/NHTS_ELDER_WALKER/merged1.RData")
+
+selected_columns <- c(
+  "time","HOUSEID", "VMT_MILE","TRPMILES"
+,"HEALTH","ALT_23","HHSIZE","PLACE","VPACT","WALK","WALK2SAVE","WALK_DEF","WALK_GKQ","dis")  # اینجا جا برای فیچرهاست که باید به آنها نام‌ها داده شود.
+
+selected_data <- selected_data %>% 
+  select(all_of(selected_columns))
+
+missing_values <- sum(is.na(selected_data))
+cat("Missing values in the selected data:", missing_values, "\n")
+
+selected_data <- na.omit(selected_data)
+
+task <- as_task_classif(selected_data, target = "time")
+
+tnr_grid_search <- tnr("random_search")
+lrn_ranger <- lrn("classif.ranger",
+                  num.trees = to_tune(300, 700),
+                  alpha = to_tune(0.25, 0.75),
+                  seed = 123,
+                  save.memory = TRUE
+)
+
+msr_acc <- msr("classif.acc")
+
+terminator <- trm("run_time", secs = 300)
+
+
+
+at <- auto_tuner(
+  tuner = tnr_grid_search,
+  learner = as_learner(ppl("robustify") %>>% lrn_ranger),
+  resampling = rsmp("holdout", ratio = 0.8),
+  measure = msr_acc,
+  terminator = terminator
+)
+
+resampling <- rsmp("holdout", ratio = 0.8)
+splits <- resampling$instantiate(task)
+
+cluster <- makeCluster(detectCores() - 1)
+doParallel::registerDoParallel(cluster)
+
+at$train(task, row_ids = splits$train)
+
+
+
+stopCluster(cluster)
+
+print(at$tuning_result)
+
+best_learner <- at$learner
+best_learner$train(task, row_ids = splits$train)
+
+
+
+
+write.csv(selected_data, "selected_data.csv", row.names = FALSE)
+
+ggplot(test_data, aes(x = time, y = predictions)) +
+  geom_abline(color = "red") +
+  geom_point() +
+  labs(title = "Predicted vs. Actual Travel Times",
+       x = "Actual Travel Time",
+       y = "Predicted Travel Time")+
+  createDataPartition()
+ 
+
+```
+
+```{r}
+#good_health
+selected_columns  <-  c(
+  "time","HOUSEID", "VMT_MILE","TRPMILES"
+,"HEALTH","ALT_23","HHSIZE","PLACE","VPACT","WALK","WALK2SAVE","WALK_DEF","WALK_GKQ","dis")
+selected_data <- data_good_health %>% 
+  select(all_of(selected_columns))
+# Check for missing values in the selected data
+missing_values <- sum(is.na(selected_data))
+cat("Missing values in the selected data:", missing_values, "\n")
+
+# Drop rows with missing values
+selected_data <- na.omit(selected_data)
+
+# Split the data into training and testing sets
+set.seed(123)  # Set seed for reproducibility
+train_index <- createDataPartition(selected_data$time, p = 0.8, list = FALSE)
+train_data <- selected_data[train_index, ]
+test_data <- selected_data[-train_index, ]
+
+# Train a simple model (random forest for demonstration)
+model <- randomForest(time ~ ., data = train_data)
+
+# Make predictions on the test set
+predictions <- predict(model, newdata = test_data)
+
+rsquared <- 1 - (sum((test_data$time - predictions)^2) / sum((test_data$time - mean(test_data$time))^2))
+cat("R-squared:", rsquared, "\n")
+
+ggplot(test_data, aes(x = time, y = predictions)) +
+  geom_abline(color = "red") +
+  geom_point(color = "#00FFFF") +
+  labs(title = "Predicted vs. Actual Travel Times",
+       x = " Travel Time",
+       y = "Predicted Travel Time")
+
+
+view(data_poor_health)
+
+selected_columns  <-  c(
+  "time","HOUSEID", "VMT_MILE","TRPMILES"
+,"HEALTH","ALT_23","HHSIZE","PLACE","VPACT","WALK","WALK2SAVE","WALK_DEF","WALK_GKQ","dis")
+selected_data <- data_poor_health %>% 
+  select(all_of(selected_columns))
+# Check for missing values in the selected data
+missing_values <- sum(is.na(selected_data))
+cat("Missing values in the selected data:", missing_values, "\n")
+
+# Drop rows with missing values
+selected_data <- na.omit(selected_data)
+
+# Split the data into training and testing sets
+set.seed(123)  # Set seed for reproducibility
+train_index <- createDataPartition(selected_data$time, p = 0.8, list = FALSE)
+train_data <- selected_data[train_index, ]
+test_data <- selected_data[-train_index, ]
+
+# Train a simple model (random forest for demonstration)
+model <- randomForest(time ~ ., data = train_data)
+
+# Make predictions on the test set
+predictions <- predict(model, newdata = test_data)
+
+rsquared <- 1 - (sum((test_data$time - predictions)^2) / sum((test_data$time - mean(test_data$time))^2))
+cat("R-squared:", rsquared, "\n")
+
+ggplot(test_data, aes(x = time, y = predictions)) +
+  geom_abline(color = "red") +
+  geom_point(color = "#FF69B4") +
+  labs(title = "Predicted vs. Actual Travel Times",
+       x = " Travel Time",
+       y = "Predicted Travel Time")
+
+
+model1_results <- data.frame(
+  Actual = test_data$time,
+  Predicted = predict(model1, newdata = test_data)
+)
+
+# Combine actual and predicted values for model 2
+model2_results <- data.frame(
+  Actual = test_data$time,
+  Predicted = predict(model2, newdata = test_data)
+)
+
+# Create a combined data frame for plotting
+combined_results <- rbind(
+  transform(model1_results, Model = "GOOD HEALTH"),
+  transform(model2_results, Model = "POOR HEALTH ")
+)
+
+# Create the scatter plot with a line of best fit
+ggplot(combined_results, aes(x = Actual, y = Predicted, color = Model)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted") +
+  ggtitle("Comparison of Model Predictions") +
+    scale_color_manual(values = c("#00FFFF", "#FF69B4"))+
+  theme_minimal()
+
+
+```
